@@ -7,8 +7,6 @@ import "../node_modules/@openzeppelin/contracts/utils/math/Math.sol";
 
 contract Dex is Wallet {
 
-    event TraderBalanceError(address trader, uint tokenBalance, uint amountToFill);
-
     using SafeMath for uint256;
     using Math for uint256;
 
@@ -144,15 +142,14 @@ contract Dex is Wallet {
         for (uint256 i=orders.length; i > 0 && amountFilled < sellOrderAmount; i--) {
             Order storage order = orders[i-1];
 
-            // verify the trader account has enough tokens
-            uint256 tokenBalance = balances[msg.sender][order.ticker];
-
+            // get the ETH balance for the account in this buy order
+            uint256 ethBalance = balances[order.trader][bytes32("ETH")];
 
             // calcualte how much of this order can be filled (remainingAmountFillable) as the min of: 
-            // 1. the token balance in the trader account 
+            // 1. the ETH balance in the trader account 
             // 2. the amount still available to be filled in this buy order
             // 3. the remaining part of the market sell order yet to be filled
-            uint256 maxSellAmount = tokenBalance;
+            uint256 maxSellAmount = ethBalance.div(order.price);
 
             uint256 orderAvailableAmount = order.amount - order.amountFilled;
             uint256 maxFillable = Math.min(orderAvailableAmount, maxSellAmount);
@@ -165,7 +162,7 @@ contract Dex is Wallet {
 
             // execute the trade   
             // 1. decrease buyer ETH balance
-            uint256 remainingAmountFillableEthCost = remainingAmountFillable.div(order.price); //20 LINK / 10 LINK/ETH = 2 ETH
+            uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price); //20 LINK * 10 wei per 1 LINK = 200 wei
             balances[order.trader][bytes32("ETH")] = balances[order.trader][bytes32("ETH")].sub(remainingAmountFillableEthCost);
             // 2. decrease seller tokens
             balances[msg.sender][order.ticker] = balances[msg.sender][order.ticker].sub(remainingAmountFillable);
@@ -204,12 +201,8 @@ contract Dex is Wallet {
         for (uint256 i=orders.length; i > 0 && amountFilled < buyOrderAmount; i--) {
             Order storage order = orders[i-1];
 
-            // verify the trader account has some ETH
+            // get the ETH balance for the account in this buy order
             uint256 ethBalance = balances[msg.sender][bytes32("ETH")];
-            if (ethBalance == 0) {
-                // if trader has no more ETH we can stop processing the asks
-                break;
-            }
 
             // calcualte how much of this order can be filled (remainingAmountFillable) as the min of: 
             // 1. the ETH balance in the trader account 
@@ -230,11 +223,6 @@ contract Dex is Wallet {
             uint256 ethCost = remainingAmountFillable.mul(order.price);
             balances[msg.sender][bytes32("ETH")] = balances[msg.sender][bytes32("ETH")].sub(ethCost);
             // 2. decrease seller tokens
-            if (balances[order.trader][order.ticker]  < remainingAmountFillable) {
-                emit TraderBalanceError(order.trader, balances[order.trader][order.ticker], remainingAmountFillable);
-                return amountFilled;
-            }
-
             balances[order.trader][order.ticker] = balances[order.trader][order.ticker].sub(remainingAmountFillable);
             // 3. increase buyer tokens
             balances[msg.sender][order.ticker] = balances[msg.sender][order.ticker].add(remainingAmountFillable);
@@ -299,6 +287,11 @@ contract Dex is Wallet {
                 address traderAddress = tradersArray[j];
                 balances[traderAddress][token] = 0;
             }
+        }
+
+        for(uint j=0; j<tradersArray.length; j++) {
+            address traderAddress = tradersArray[j];
+            balances[traderAddress][bytes32("ETH")] = 0;
         }
     }
 

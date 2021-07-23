@@ -14,7 +14,7 @@ async function printTokenBalance(dex, ticker) {
     console.log(">>>>>  tokenBalance: ", ticker, balance.toNumber())
 }
 
-contract("Dex - Limit Orders", accounts => {
+contract.skip("Dex - Limit Orders Tests", accounts => {
 
     beforeEach(async () => {
         let dex = await Dex.deployed()

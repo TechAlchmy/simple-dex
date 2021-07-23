@@ -3,20 +3,17 @@ const Link = artifacts.require("Link")
 
 const truffleAssert = require("truffle-assertions")
 
-async function printOrders(dex, ticker, side) {
-    let orders = await dex.getOrderBook(ticker, side)
-    let orderPrices = orders.map(order => order.price)
-
-    console.log(">>>>>  orderPrices: ", side, orderPrices)
-
+let Side = {
+    BUY: 0,
+    SELL: 1,
 }
 
-async function printTokenBalance(dex, ticker) {
-    let balance = await dex.getTokenBalance(ticker)
-    console.log(">>>>>  tokenBalance: ", ticker, balance.toNumber())
+let OrderType = {
+    LIMIT: 0,
+    MARKET: 1,
 }
 
-contract("Dex - Market Orders Tests", accounts => {
+contract("Dex - Market BUY Orders Tests", accounts => {
 
     beforeEach(async () => {
         let dex = await Dex.deployed()
@@ -27,10 +24,6 @@ contract("Dex - Market Orders Tests", accounts => {
         await link.transfer(accounts[1], 500)
     })
 
-    let Side = {
-        BUY: 0,
-        SELL: 1,
-    }
 
     it("A BUY market order is reverted when the account has no ETH", async () => {
         let dex = await Dex.deployed()
@@ -45,36 +38,19 @@ contract("Dex - Market Orders Tests", accounts => {
         )
     })
 
-
-    it("A SELL market order is reverted when its amount is less than the account token balance", async () => {
-        let dex = await Dex.deployed()
-        let link = await Link.deployed()
-
-        let ticker = web3.utils.fromUtf8("LINK")
-        let depositAmount = 20 
-        let amount = 100
-    
-        await link.approve(dex.address, depositAmount)
-        await dex.deposit(depositAmount, ticker)
-        
-        await truffleAssert.reverts(
-            dex.createMarketOrder(Side.SELL, ticker, amount)
-        )
-    })
-
   
-    it("A market order can be created even if the orderbook is empty", async () => {
+    it("A BUY market order can be created even if the orderbook is empty", async () => {
         let dex = await Dex.deployed()
-        let link = await Link.deployed()
+        // let link = await Link.deployed()
 
         let ticker = web3.utils.fromUtf8("LINK")
         let amount = 20 
     
-        await link.approve(dex.address, amount)
+        // await link.approve(dex.address, amount)
         await dex.depositEth({value: 1000})
 
-        // let orderbook = await dex.getOrderBook(ticker, Side.BUY)
-        // assert.equal(orderbook.length, 0, "Buy side of orderbook is not empty")
+        let orderbook = await dex.getOrderBook(ticker, Side.BUY)
+        assert.equal(orderbook.length, 0, "Buy side of orderbook is not empty")
         
         await truffleAssert.passes(
             dex.createMarketOrder(Side.BUY, ticker, amount)
@@ -107,12 +83,14 @@ contract("Dex - Market Orders Tests", accounts => {
         assert.equal(orders.length, 1, "Expecting 1 order but "+orders.length+" were found")
 
         let order = orders[0];
+        assert.equal(order.orderType, OrderType.MARKET, "Invalid order type")
+        assert.equal(order.side, Side.BUY, "Invalid order side")
         assert.equal(order.amount, buyAmount, "Invalid order amount")
         assert.equal(order.amountFilled, buyAmount, "Order not 100% filled")
     })
 
 
-    it("A BUY mnarket order reduces the ETH balance of its account by the amount filled", async () => {
+    it("A BUY market order reduces the ETH balance of its account by the amount filled", async () => {
         let dex = await Dex.deployed()
         let link = await Link.deployed()
 
@@ -244,14 +222,14 @@ contract("Dex - Market Orders Tests", accounts => {
         // veify SELL limit order was partially filled 
         let sellOrders = await dex.getOrderBook(ticker, Side.SELL)
         let sellOrder = sellOrders[0]
-        assert.equal(orders.length, 1, "Expecting 1 sell order but "+sellOrder.length+" were found")
+        assert.equal(sellOrders.length, 1, "Expecting 1 sell order but "+sellOrder.length+" were found")
 
         assert.equal(sellOrder.amount, sellOrderAmount, "Invalid SELL order amount")
         assert.equal(sellOrder.amountFilled, buyOrderAmount, "Invalid SELL order filled amount")
     })
 
 
-    it("A BUY market order causes the limit SELL orders that is fully filled to be removed from the orderbook", async () => {
+    it("A BUY market order causes the limit SELL orders that are fully filled to be removed from the orderbook", async () => {
         let dex = await Dex.deployed()
         let link = await Link.deployed()
 
@@ -307,7 +285,7 @@ contract("Dex - Market Orders Tests", accounts => {
     })
 
 
-    it("A BUY market order should fill the remaining part of a partially filled limit SELL order", async () => {
+    it("BUY market orders should fill the remaining part of partially filled limit SELL orders", async () => {
         let dex = await Dex.deployed()
         let link = await Link.deployed()
 
@@ -353,7 +331,7 @@ contract("Dex - Market Orders Tests", accounts => {
     })
 
 
-    it("Limit orders that are completely filled should be available in the order history", async () => {
+    it("Limit SELL orders that are completely filled should be moved to the order history", async () => {
         let dex = await Dex.deployed()
         let link = await Link.deployed()
 
@@ -373,25 +351,23 @@ contract("Dex - Market Orders Tests", accounts => {
         await link.approve(dex.address, depositAmount)
         await dex.depositEth({value: depositAmount})
         
-        // create 1st BUY market order by accounts[0]
+        // create 3 BUY market orders by accounts[0]
         await dex.createMarketOrder(Side.BUY, ticker, buyOrderAmount)
-        // create 2st BUY market order by accounts[0]
         await dex.createMarketOrder(Side.BUY, ticker, buyOrderAmount)
-        // create 3st BUY market order by accounts[0]
         await dex.createMarketOrder(Side.BUY, ticker, buyOrderAmount)
 
         // veify SELL orderbook has 0 orders left
         let sellOrders = await dex.getOrderBook(ticker, Side.SELL)
         assert.equal(sellOrders.length, 0, "Invalid number of SELL orders in orderbook")
 
-        // veify limit orders in order history for account1
+        // veify filled limit orders are available in order history for limit buyer
         let ordersAccount1 = await dex.getOrders(ticker, {from: accounts[1]} )
         assert.equal(ordersAccount1.length, 3, "Invalid number of limit orders in order history")
         assert.equal(ordersAccount1[0].amountFilled, ordersAccount1[0].amount, "Invalid amountFilled in limit order in order history")
         assert.equal(ordersAccount1[1].amountFilled, ordersAccount1[1].amount, "Invalid amountFilled in limit order in order history")
         assert.equal(ordersAccount1[2].amountFilled, ordersAccount1[1].amount, "Invalid amountFilled in limit order in order history")
 
-        // veify market order in order history for account0
+        // veify market orders are available in order history for market buyer
         let ordersAccount0 = await dex.getOrders(ticker)
         assert.equal(ordersAccount0.length, 3, "Invalid number of market orders in order history")
         assert.equal(ordersAccount0[0].amountFilled, 20, "Invalid filled amount in market order in order history")
