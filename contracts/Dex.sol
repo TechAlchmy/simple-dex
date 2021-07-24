@@ -101,13 +101,8 @@ contract Dex is Wallet {
         Side bookSide = (side == Side.BUY)? Side.SELL : Side.BUY;
         Order[] storage orders = orderBook[ticker][bookSide];
         
-        uint256 amountFilled = 0;
-        if(bookSide == Side.BUY) {
-             amountFilled = _processBids(orders, amount);
-        } else {
-            amountFilled = _processAsks(orders, amount);
-        }
-        
+        uint256 amountFilled = _processOrders(bookSide, orders, amount);
+
         // add market oredr to order history
         Order memory order = Order(
                 nextCounterId,
@@ -132,44 +127,45 @@ contract Dex is Wallet {
     }
 
     
-    // bids (aka buy orders) are processed from the highest price to the lowest 
-    // which means from the last to the first order in the orders array.
-    function  _processBids(Order[] storage orders, uint sellOrderAmount) private returns(uint256) {
 
+    function _processOrders(Side side, Order[] storage orders, uint marketOrderAmount) private returns(uint256) {
         if (orders.length == 0) return 0;
         uint256 amountFilled = 0;
 
-        for (uint256 i=orders.length; i > 0 && amountFilled < sellOrderAmount; i--) {
+        for (uint256 i=orders.length; i > 0 && amountFilled < marketOrderAmount; i--) {
             Order storage order = orders[i-1];
 
-            // get the ETH balance for the account in this buy order
-            uint256 ethBalance = balances[order.trader][bytes32("ETH")];
+            // buyer ande seller accounts 
+            (address buyerAddress, address sellerAddress) = (side == Side.BUY)? (order.trader, msg.sender) : (msg.sender, order.trader);
+
+            // get the ETH balance for the buyer account 
+            uint256 ethBalance = balances[buyerAddress][bytes32("ETH")];
 
             // calcualte how much of this order can be filled (remainingAmountFillable) as the min of: 
             // 1. the ETH balance in the trader account 
             // 2. the amount still available to be filled in this buy order
             // 3. the remaining part of the market sell order yet to be filled
-            uint256 maxSellAmount = ethBalance.div(order.price);
+            uint256 maxAmount = ethBalance.div(order.price);
 
             uint256 orderAvailableAmount = order.amount - order.amountFilled;
-            uint256 maxFillable = Math.min(orderAvailableAmount, maxSellAmount);
-            uint256 remainingAmountToFill = sellOrderAmount.sub(amountFilled);
+            uint256 maxFillable = Math.min(orderAvailableAmount, maxAmount);
+            uint256 remainingAmountToFill = marketOrderAmount.sub(amountFilled);
             uint256 remainingAmountFillable = Math.min(remainingAmountToFill, maxFillable);
 
-            // increment the amountFilled of this buy order by `remainingAmountFillable` (e.g the additional amount filled in the sell order) 
+            // increment the amountFilled of this buy order by `remainingAmountFillable` (e.g the additional amount filled in the limit order) 
             order.amountFilled = order.amountFilled.add(remainingAmountFillable);
-            require(order.amountFilled <= order.amount, "Amount filled exceeds buy order amount");
+            require(order.amountFilled <= order.amount, "Amount filled exceeds limit order amount");
 
             // execute the trade   
             // 1. decrease buyer ETH balance
-            uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price); //20 LINK * 10 wei per 1 LINK = 200 wei
-            balances[order.trader][bytes32("ETH")] = balances[order.trader][bytes32("ETH")].sub(remainingAmountFillableEthCost);
+            uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price);
+            balances[buyerAddress][bytes32("ETH")] = balances[buyerAddress][bytes32("ETH")].sub(remainingAmountFillableEthCost);
             // 2. decrease seller tokens
-            balances[msg.sender][order.ticker] = balances[msg.sender][order.ticker].sub(remainingAmountFillable);
+            balances[sellerAddress][order.ticker] = balances[sellerAddress][order.ticker].sub(remainingAmountFillable);
             // 3. increase buyer tokens
-            balances[order.trader][order.ticker] = balances[order.trader][order.ticker].add(remainingAmountFillable);
+            balances[buyerAddress][order.ticker] = balances[buyerAddress][order.ticker].add(remainingAmountFillable);
             // 4. increase seller ETH balance
-            balances[msg.sender][bytes32("ETH")] = balances[msg.sender][bytes32("ETH")].add(remainingAmountFillableEthCost);
+            balances[sellerAddress][bytes32("ETH")] = balances[sellerAddress][bytes32("ETH")].add(remainingAmountFillableEthCost);
 
             // increment the amountFilled of the buy order with the amount filled in tihs sell order
             amountFilled = amountFilled.add(remainingAmountFillable);
@@ -184,65 +180,6 @@ contract Dex is Wallet {
 
         return amountFilled;
     }
-
-
-    // ASKS are ordered in descending price order
-    //[10 7]  10 link at 7 eth / link
-    //[10 5]
-    //[10 3]
-
-    // asks (aka sell orders) are processed from the lowest price to the highest 
-    // which means from the last to the first order in the orders array.
-    function  _processAsks(Order[] storage orders, uint256 buyOrderAmount) private returns(uint256) {
-
-        if (orders.length == 0) return 0;
-        uint256 amountFilled = 0;
-
-        for (uint256 i=orders.length; i > 0 && amountFilled < buyOrderAmount; i--) {
-            Order storage order = orders[i-1];
-
-            // get the ETH balance for the account in this buy order
-            uint256 ethBalance = balances[msg.sender][bytes32("ETH")];
-
-            // calcualte how much of this order can be filled (remainingAmountFillable) as the min of: 
-            // 1. the ETH balance in the trader account 
-            // 2. the amount still available to be filled in this sell order
-            // 3. the remaining part of the buy order yet to be filled
-            uint256 maxBuyAmount = ethBalance.div(order.price);
-            uint256 orderAvailableAmount = order.amount - order.amountFilled;
-            uint256 maxFillable = Math.min(orderAvailableAmount, maxBuyAmount);
-            uint256 remainingAmountToFill = buyOrderAmount.sub(amountFilled);
-            uint256 remainingAmountFillable = Math.min(remainingAmountToFill, maxFillable);
-
-            // increment the amountFilled of this sell order by `remainingAmountFillable` (e.g the amount filled in the buy order) 
-            order.amountFilled = order.amountFilled.add(remainingAmountFillable);
-            require(order.amountFilled <= order.amount, "Amount filled exceeds sell order amount");
-
-            // execute the trade
-            // 1. decrease buyer ETH balance
-            uint256 ethCost = remainingAmountFillable.mul(order.price);
-            balances[msg.sender][bytes32("ETH")] = balances[msg.sender][bytes32("ETH")].sub(ethCost);
-            // 2. decrease seller tokens
-            balances[order.trader][order.ticker] = balances[order.trader][order.ticker].sub(remainingAmountFillable);
-            // 3. increase buyer tokens
-            balances[msg.sender][order.ticker] = balances[msg.sender][order.ticker].add(remainingAmountFillable);
-            // 4. increase seller ETH balance
-            balances[order.trader][bytes32("ETH")] = balances[order.trader][bytes32("ETH")].add(ethCost);
-
-            // increment the amountFilled of the buy order with the amount filled in tihs sell order
-            amountFilled = amountFilled.add(remainingAmountFillable);
-        }
-
-        // remove filled orders from orderbook and move them to order history
-        while(orders.length > 0 && orders[orders.length-1].amountFilled == orders[orders.length-1].amount) {
-            Order memory order = orders[orders.length-1];
-            orderHistory[order.ticker][order.trader].push(order);
-            orders.pop();
-        }
-
-        return amountFilled;
-    }
-
     
     function clear()  onlyOwner public {
         _clearOrderBook();
