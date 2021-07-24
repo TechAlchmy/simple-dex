@@ -1,7 +1,6 @@
+const truffleAssert = require("truffle-assertions")
 const Dex = artifacts.require("Dex")
 const Link = artifacts.require("Link")
-
-const truffleAssert = require("truffle-assertions")
 
 let Side = {
     BUY: 0,

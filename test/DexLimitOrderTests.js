@@ -1,20 +1,13 @@
+const truffleAssert = require("truffle-assertions")
 const Dex = artifacts.require("Dex")
 const Link = artifacts.require("Link")
 
-const truffleAssert = require("truffle-assertions")
-
-async function printOrders(dex, ticker, side) {
-    let orders = await dex.getOrderBook(ticker, side)
-    let orderPrices = orders.map(order => order.price)
-    console.log(">>>>>  orderPrices: ", side, orderPrices)
+let Side = {
+    BUY: 0,
+    SELL: 1,
 }
 
-async function printTokenBalance(dex, ticker) {
-    let balance = await dex.getTokenBalance(ticker)
-    console.log(">>>>>  tokenBalance: ", ticker, balance.toNumber())
-}
-
-contract.skip("Dex - Limit Orders Tests", accounts => {
+contract("Dex - Limit Orders Tests", accounts => {
 
     beforeEach(async () => {
         let dex = await Dex.deployed()
@@ -23,13 +16,7 @@ contract.skip("Dex - Limit Orders Tests", accounts => {
         await dex.clear()
         await dex.addToken(ticker, link.address)
         await link.transfer(accounts[1], 500)
-
     })
-
-    let Side = {
-        BUY: 0,
-        SELL: 1,
-    }
 
 
     it("revert a BUY order request when ETH balance is not sufficient", async () => {
@@ -114,5 +101,4 @@ contract.skip("Dex - Limit Orders Tests", accounts => {
             assert.equal(orderPrices[i], expectedPrices[i], "Incorrect ordering of buy orders in orderbook")
         }
     })
-
 })
