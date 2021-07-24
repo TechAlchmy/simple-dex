@@ -181,24 +181,11 @@ contract Dex is Wallet {
             order.amountFilled = order.amountFilled.add(remainingAmountFillable);
             require(order.amountFilled <= order.amount, "Amount filled exceeds limit order amount");
 
-
-
-            // // execute the trade   
-            // // 1. decrease buyer ETH balance
-            // uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price);
-            // reservedBalances[buyerAddress][bytes32("ETH")] = reservedBalances[buyerAddress][bytes32("ETH")].sub(remainingAmountFillableEthCost);
-            // // 2. decrease seller tokens
-            // reservedBalances[sellerAddress][order.ticker] = reservedBalances[sellerAddress][order.ticker].sub(remainingAmountFillable);
-            // // 3. increase buyer tokens
-            // balances[buyerAddress][order.ticker] = balances[buyerAddress][order.ticker].add(remainingAmountFillable);
-            // // 4. increase seller ETH balance
-            // balances[sellerAddress][bytes32("ETH")] = balances[sellerAddress][bytes32("ETH")].add(remainingAmountFillableEthCost);
-
             uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price);
             (address buyerAddress, address sellerAddress) = (side == Side.BUY)? (order.trader, msg.sender) : (msg.sender, order.trader);
 
             // execute the trade 
-            // 1. decrease buyer reserved ETH balance
+            // 1. decrease buyer ETH balance
             mapping (address => mapping(bytes32 => uint256)) storage buyerBalances = (side == Side.BUY) ? reservedBalances: balances;
             buyerBalances[buyerAddress][bytes32("ETH")] = buyerBalances[buyerAddress][bytes32("ETH")].sub(remainingAmountFillableEthCost);
             // 2. decrease seller tokens

@@ -4,6 +4,7 @@ const Link = artifacts.require("Link")
 const truffleAssert = require("truffle-assertions")
 
 contract("Wallet Tests", accounts => {
+    
     it("should pass when the owner adds a token", async () => {
         let dex = await Dex.deployed()
         let link = await Link.deployed()

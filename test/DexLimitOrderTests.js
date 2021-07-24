@@ -69,8 +69,6 @@ contract("Dex - Limit Orders Tests", accounts => {
         let orders = await dex.getOrderBook(ticker, Side.BUY)
         let orderPrices = orders.map(order => order.price)
 
-        // console.log(">>>>> BUY orderPrices: ", orderPrices)
-
         let expectedPrices = [15, 20, 40, 50]
         for(let i = 0; i < expectedPrices.length; i++) {
             assert.equal(orderPrices[i], expectedPrices[i], "Incorrect ordering of buy orders in orderbook")
@@ -101,4 +99,72 @@ contract("Dex - Limit Orders Tests", accounts => {
             assert.equal(orderPrices[i], expectedPrices[i], "Incorrect ordering of buy orders in orderbook")
         }
     })
+
+
+    it("A BUY limit order transfers the amount of ETH rquired to execute the trade to the ETH reserved balance", async () => {
+        let dex = await Dex.deployed()
+
+        let ticker = web3.utils.fromUtf8("LINK")
+        let ethDeposited = 1000
+        let buyAmount = 20;
+        let price = 10 
+
+        // add SELL limit order to the orderbook
+        await dex.depositEth({value: ethDeposited})
+
+        // verify initial ETH balance and reserved ETH balance
+        let ethBalanceBefore = (await dex.getEthBalance()).toNumber()
+        assert.equal(ethBalanceBefore, ethDeposited, "Invalid ETH amount")
+
+        let reservedEthBalanceBefore = (await dex.getReservedEthBalance()).toNumber()
+        assert.equal(reservedEthBalanceBefore, 0, "Invalid reserved ETH amount")
+
+        // create limit BUY order
+        await dex.createLimitOrder(Side.BUY, ticker, buyAmount, price)
+     
+        // verify ETH balance
+        let ethBalanceAfter = (await dex.getEthBalance()).toNumber()
+        let expetedEthAmount = ethBalanceBefore - (buyAmount * price)
+        assert.equal(ethBalanceAfter, expetedEthAmount, "Invalid ETH amount")
+        
+        // verify reserved ETH balance
+        let reservedEthBalanceAfter = (await dex.getReservedEthBalance()).toNumber()
+        let expetedReservedEthAmount = buyAmount * price
+        assert.equal(reservedEthBalanceAfter, expetedReservedEthAmount, "Invalid reserved ETH amount")
+    })
+
+
+    it("A SELL limit order transfers the amount of tokens rquired to execute the trade to the token reserved balance", async () => {
+        let dex = await Dex.deployed()
+        let link = await Link.deployed()
+
+        let ticker = web3.utils.fromUtf8("LINK")
+        let depositAmount = 100
+        let sellAmount = 20;
+        let price = 10 
+
+        // add SELL limit order to the orderbook
+        await link.approve(dex.address, depositAmount)
+        await dex.deposit(depositAmount, ticker)
+
+        // verify initial token balance and reserved token balance
+        let tokenBalanceBefore = (await dex.getTokenBalance(ticker)).toNumber()
+        assert.equal(tokenBalanceBefore, depositAmount, "Invalid token amount")
+
+        let reservedTokenBalanceBefore = (await dex.getReservedTokenBalance(ticker)).toNumber()
+        assert.equal(reservedTokenBalanceBefore, 0, "Invalid reserved token amount")
+
+        // create limit SELL order
+        await dex.createLimitOrder(Side.SELL, ticker, sellAmount, price)
+     
+        // verify token balance
+        let tokenBalanceAfter = (await dex.getTokenBalance(ticker)).toNumber()
+        let expetedTokenAmount = tokenBalanceBefore - sellAmount
+        assert.equal(tokenBalanceAfter, expetedTokenAmount, "Invalid token amount")
+        
+        // verify reserved token balance
+        let reservedTokenBalanceAfter = (await dex.getReservedTokenBalance(ticker)).toNumber()
+        assert.equal(reservedTokenBalanceAfter, sellAmount, "Invalid reserved token amount")
+    })
+
 })
