@@ -24,13 +24,14 @@ contract Dex is Wallet {
         uint256 price;
     }
 
+
     mapping (bytes32 => mapping (Side => Order[])) public orderBook;
     mapping (bytes32 => mapping (address => Order[])) public orderHistory;
-
+    mapping (address => mapping(bytes32 => uint256)) public reservedBalances; // tokens reserverd to execute limit orders
     mapping (address => bool) public tradersAddresses; // the addresses of every trader that submitted orders 
     address[] public tradersArray; // the addresses of every trader that submitted orders 
-
     uint256 public nextCounterId = 0;
+
 
     function getOrderBook(bytes32 ticker, Side side) view external returns (Order[] memory) {
         return orderBook[ticker][side];
@@ -40,19 +41,37 @@ contract Dex is Wallet {
         return orderHistory[ticker][msg.sender];
     }
 
+    function getReservedTokenBalance(bytes32 ticker) tokenExists(ticker) external view returns (uint256) {
+        return reservedBalances[msg.sender][ticker];
+    }
+
+    function getReservedEthBalance() public view returns (uint){
+        return reservedBalances[msg.sender][bytes32("ETH")];
+    }
+
     function createLimitOrder(Side side, bytes32 ticker, uint256 amount, uint256 price) public returns (uint256) {
 
+        // reserve eth to execute limit BUY order
         if (side == Side.BUY) {
-            uint256 ethBalance = balances[msg.sender][bytes32("ETH")];
-            require( ethBalance >= amount.mul(price), "Insufficient ETH balance to buy tokens");
+            bytes32 eth = bytes32("ETH");
+            uint256 ethBalance = balances[msg.sender][eth];
+            uint256 orderCost = amount.mul(price);
+            require( ethBalance >= orderCost, "Insufficient ETH balance");
+
+            balances[msg.sender][eth] = balances[msg.sender][eth].sub(orderCost);
+            reservedBalances[msg.sender][eth] = reservedBalances[msg.sender][eth].add(orderCost);
         }
 
+        // reserve tokens to execute limit SELL order
         if (side == Side.SELL) {
             uint256 tokenBalance = balances[msg.sender][ticker];
-            require( tokenBalance >= amount, "Insufficient balance of token to sell");
+            require( tokenBalance >= amount, "Insufficient token balance");
+
+            balances[msg.sender][ticker] = balances[msg.sender][ticker].sub(amount);
+            reservedBalances[msg.sender][ticker] = reservedBalances[msg.sender][ticker].add(amount);
         }
 
-        Order[] storage orders = orderBook[ticker][side];
+        // create limit order
         Order memory order = Order(
             nextCounterId,
             OrderType.LIMIT,
@@ -63,15 +82,9 @@ contract Dex is Wallet {
             0,
             price
         );
-        orders.push(order);
 
-        if (side == Side.BUY) {
-            // buy orders are ordered by ascending prices
-            _sortAsc(orders);
-        } else if (side == Side.SELL) {
-            // sell orders are ordered by descending prices
-            _sortDesc(orders);
-        }
+        // add limit order to orderbook
+        _addLimitOrder(order, side, ticker);
 
         // remember this trader address
         if (tradersAddresses[msg.sender] == false) {
@@ -81,7 +94,6 @@ contract Dex is Wallet {
 
         // increment order sequence
         nextCounterId++;
-
         return order.id;
     }
 
@@ -90,12 +102,12 @@ contract Dex is Wallet {
 
         if (side == Side.BUY) {
             uint256 ethBalance = balances[msg.sender][bytes32("ETH")];
-            require( ethBalance > 0, "Insufficient ETH balance to buy tokens");
+            require( ethBalance > 0, "Insufficient ETH balance");
         }
 
         if (side == Side.SELL) {
             uint256 tokenBalance = balances[msg.sender][ticker];
-            require( tokenBalance >= amount, "Insufficient balance of token to sell");
+            require( tokenBalance >= amount, "Insufficient token balance");
         }
 
         Side bookSide = (side == Side.BUY)? Side.SELL : Side.BUY;
@@ -114,7 +126,7 @@ contract Dex is Wallet {
                 amountFilled,
                 0
         );
-        _addToOrderHistory(order);
+        orderHistory[order.ticker][order.trader].push(order);
         nextCounterId++;
 
         // remember this trader address
@@ -126,7 +138,27 @@ contract Dex is Wallet {
         return order.id;
     }
 
-    
+
+    // reset internal data structures (used in tests)
+    function clear()  onlyOwner public {
+        _clearOrderBook();
+        _clearBalances();
+        _clearOrders();
+        _clearTokens();
+        _clearTraderAddresses();
+        nextCounterId = 0;
+    }
+
+
+    // add a limit order to the orderbook.
+    // buy orders (bids) are sorted in ascending price order and sell orders (asks) sorted in descending price order.
+    // this is to allow to match market orders against limit  orders processing both buy/sell orders array from the last item to the first.
+    function _addLimitOrder(Order memory order, Side bookSide, bytes32 ticker) private {
+        Order[] storage orders = orderBook[ticker][bookSide];
+        orders.push(order);
+        if (bookSide == Side.BUY) _sortAsc(orders); else _sortDesc(orders);
+    }
+
 
     function _processOrders(Side side, Order[] storage orders, uint marketOrderAmount) private returns(uint256) {
         if (orders.length == 0) return 0;
@@ -135,33 +167,43 @@ contract Dex is Wallet {
         for (uint256 i=orders.length; i > 0 && amountFilled < marketOrderAmount; i--) {
             Order storage order = orders[i-1];
 
-            // buyer ande seller accounts 
-            (address buyerAddress, address sellerAddress) = (side == Side.BUY)? (order.trader, msg.sender) : (msg.sender, order.trader);
+            // get buyer and seller accounts 
+            //(address buyerAddress, address sellerAddress) = (msg.sender, order.trader);
 
-            // get the ETH balance for the buyer account 
-            uint256 ethBalance = balances[buyerAddress][bytes32("ETH")];
-
-            // calcualte how much of this order can be filled (remainingAmountFillable) as the min of: 
-            // 1. the ETH balance in the trader account 
-            // 2. the amount still available to be filled in this buy order
-            // 3. the remaining part of the market sell order yet to be filled
-            uint256 maxAmount = ethBalance.div(order.price);
-
+            // calcualte how much of this limit order can be filled (remainingAmountFillable) as the min of: 
+            // 1. the amount still available to be filled in this limit order (orderAvailableAmount)
+            // 2. the remaining part of the market order yet to be filled (remainingAmountToFill)
             uint256 orderAvailableAmount = order.amount - order.amountFilled;
-            uint256 maxFillable = Math.min(orderAvailableAmount, maxAmount);
             uint256 remainingAmountToFill = marketOrderAmount.sub(amountFilled);
-            uint256 remainingAmountFillable = Math.min(remainingAmountToFill, maxFillable);
+            uint256 remainingAmountFillable = Math.min(orderAvailableAmount, remainingAmountToFill);
 
             // increment the amountFilled of this buy order by `remainingAmountFillable` (e.g the additional amount filled in the limit order) 
             order.amountFilled = order.amountFilled.add(remainingAmountFillable);
             require(order.amountFilled <= order.amount, "Amount filled exceeds limit order amount");
 
-            // execute the trade   
-            // 1. decrease buyer ETH balance
+
+
+            // // execute the trade   
+            // // 1. decrease buyer ETH balance
+            // uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price);
+            // reservedBalances[buyerAddress][bytes32("ETH")] = reservedBalances[buyerAddress][bytes32("ETH")].sub(remainingAmountFillableEthCost);
+            // // 2. decrease seller tokens
+            // reservedBalances[sellerAddress][order.ticker] = reservedBalances[sellerAddress][order.ticker].sub(remainingAmountFillable);
+            // // 3. increase buyer tokens
+            // balances[buyerAddress][order.ticker] = balances[buyerAddress][order.ticker].add(remainingAmountFillable);
+            // // 4. increase seller ETH balance
+            // balances[sellerAddress][bytes32("ETH")] = balances[sellerAddress][bytes32("ETH")].add(remainingAmountFillableEthCost);
+
             uint256 remainingAmountFillableEthCost = remainingAmountFillable.mul(order.price);
-            balances[buyerAddress][bytes32("ETH")] = balances[buyerAddress][bytes32("ETH")].sub(remainingAmountFillableEthCost);
+            (address buyerAddress, address sellerAddress) = (side == Side.BUY)? (order.trader, msg.sender) : (msg.sender, order.trader);
+
+            // execute the trade 
+            // 1. decrease buyer reserved ETH balance
+            mapping (address => mapping(bytes32 => uint256)) storage buyerBalances = (side == Side.BUY) ? reservedBalances: balances;
+            buyerBalances[buyerAddress][bytes32("ETH")] = buyerBalances[buyerAddress][bytes32("ETH")].sub(remainingAmountFillableEthCost);
             // 2. decrease seller tokens
-            balances[sellerAddress][order.ticker] = balances[sellerAddress][order.ticker].sub(remainingAmountFillable);
+            mapping (address => mapping(bytes32 => uint256)) storage sellerBalances = (side == Side.BUY) ? balances: reservedBalances;
+            sellerBalances[sellerAddress][order.ticker] = sellerBalances[sellerAddress][order.ticker].sub(remainingAmountFillable);
             // 3. increase buyer tokens
             balances[buyerAddress][order.ticker] = balances[buyerAddress][order.ticker].add(remainingAmountFillable);
             // 4. increase seller ETH balance
@@ -180,16 +222,33 @@ contract Dex is Wallet {
 
         return amountFilled;
     }
-    
-    function clear()  onlyOwner public {
-        _clearOrderBook();
-        _clearBalances();
-        _clearOrders();
-        _clearTokens();
-        _clearTraderAddresses();
-        nextCounterId = 0;
+
+
+    //// orderbook sorting functions 
+    function _sortDesc(Order[] storage orders) private {
+        for(uint i=orders.length-1; i>0; i--) {
+            if (orders[i-1].price < orders[i].price) {
+               _swap(orders, i-1, i);
+            } else break;
+        }
     }
 
+    function _sortAsc(Order[] storage orders) private {
+        for(uint i=orders.length-1; i>0; i--) {
+            if (orders[i-1].price > orders[i].price) {
+                _swap(orders, i-1, i);
+            } else break;
+        }
+    }
+
+    function _swap(Order[] storage orders, uint256 i, uint256 j) private {
+        Order memory tmp = orders[i];
+        orders[i] = orders[j];
+        orders[j] = tmp;
+    }
+
+
+    ///// functions to reset data structures (used in tests)
     function _clearTraderAddresses() private {
         for(uint i=0; i < tradersArray.length; i++) {
             tradersAddresses[tradersArray[i]] = false;
@@ -223,42 +282,15 @@ contract Dex is Wallet {
             for(uint j=0; j<tradersArray.length; j++) {
                 address traderAddress = tradersArray[j];
                 balances[traderAddress][token] = 0;
+                reservedBalances[traderAddress][token] = 0;
             }
         }
 
         for(uint j=0; j<tradersArray.length; j++) {
             address traderAddress = tradersArray[j];
             balances[traderAddress][bytes32("ETH")] = 0;
+            reservedBalances[traderAddress][bytes32("ETH")] = 0;
         }
     }
 
-    function _sortDesc(Order[] storage orders) private {
-        for(uint i=orders.length-1; i>0; i--) {
-            if (orders[i-1].price < orders[i].price) {
-               _swap(orders, i-1, i);
-            } else break;
-        }
-    }
-
-    function _sortAsc(Order[] storage orders) private {
-        for(uint i=orders.length-1; i>0; i--) {
-            if (orders[i-1].price > orders[i].price) {
-                _swap(orders, i-1, i);
-            } else break;
-        }
-    }
-
-    function _swap(Order[] storage orders, uint256 i, uint256 j) private {
-        Order memory tmp = orders[i];
-        orders[i] = orders[j];
-        orders[j] = tmp;
-    }
-
-    function _removeLastItem(Order[] storage orders) private {
-        orders.pop();
-    }
-
-    function _addToOrderHistory(Order memory order) private {
-        orderHistory[order.ticker][order.trader].push(order);
-    }
 }

@@ -50,12 +50,7 @@ contract Wallet is Ownable {
         return allowance;
     }
 
-    function depositEth() public payable returns (uint256) {
-        bytes32 ticker = bytes32("ETH");
-        balances[msg.sender][ticker] = balances[msg.sender][ticker].add(msg.value);
 
-        return balances[msg.sender][ticker];
-    }
 
     function deposit(uint256 amount, bytes32 ticker) tokenExists(ticker) external {
         require(IERC20(tokenMapping[ticker].tokenAddress).allowance(msg.sender, address(this)) >= amount, "Insufficient allowance");
@@ -65,10 +60,22 @@ contract Wallet is Ownable {
     }
 
     function withdraw(uint256 amount, bytes32 ticker) tokenExists(ticker) external {
-        require(balances[msg.sender][ticker] >= amount, "Insufficient balance");
+        require(balances[msg.sender][ticker] >= amount, "Insufficient token balance");
 
         balances[msg.sender][ticker] = balances[msg.sender][ticker].sub(amount);
         IERC20(tokenMapping[ticker].tokenAddress).transfer(msg.sender, amount);
+    }
+
+    function depositEth() public payable returns (uint256) {
+        balances[msg.sender][bytes32("ETH")] = balances[msg.sender][bytes32("ETH")].add(msg.value);
+
+        return balances[msg.sender][bytes32("ETH")];
+    }
+
+    function withdrawEth(uint256 amount) external {
+        require(balances[msg.sender][bytes32("ETH")] >= amount, "Insufficient ETH balance");
+        balances[msg.sender][bytes32("ETH")] = balances[msg.sender][bytes32("ETH")].sub(amount);
+        payable(msg.sender).transfer(amount);
     }
 
     function _clearTokens() onlyOwner internal {

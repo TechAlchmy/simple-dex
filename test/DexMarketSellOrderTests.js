@@ -159,7 +159,7 @@ contract("Dex - Market SELL Orders Tests", accounts => {
     })
 
 
-    it("A SELL market order adjusts the buyer and seller ETH balance by the amount filled", async () => {
+    it("A SELL market order adjusts the buyer reserved ETH balance and seller ETH balance by the amount filled", async () => {
         let dex = await Dex.deployed()
         let link = await Link.deployed()
 
@@ -168,12 +168,16 @@ contract("Dex - Market SELL Orders Tests", accounts => {
         let price = 20  // wei per 1 link
 
         // add BUY limit order to the orderbook by accounts[1]
-        let depositedEth = buyAmount * price
+        let depositedEth = buyAmount * price + 1000
         await dex.depositEth({value: depositedEth, from: accounts[1]})
         await dex.createLimitOrder(Side.BUY, ticker, buyAmount, price, {from: accounts[1]})
 
+        // veify buyer balance and reserved ETH balance
         let buyerEthBalanceBefore = (await dex.getEthBalance({from: accounts[1]})).toNumber()
-        assert.equal(buyerEthBalanceBefore, depositedEth, "Invalid buyer ETH balance")
+        assert.equal(buyerEthBalanceBefore, depositedEth - (buyAmount * price), "Invalid buyer ETH balance")
+
+        let buyerReservedEthBalanceBefore = (await dex.getReservedEthBalance({from: accounts[1]})).toNumber()
+        assert.equal(buyerReservedEthBalanceBefore, buyAmount * price, "Invalid buyer reserved ETH balance")
 
         // create SELL market order by accounts[0]
         let depositAmount = sellAmount * price
@@ -184,10 +188,10 @@ contract("Dex - Market SELL Orders Tests", accounts => {
         assert.equal(sellerEthBalanceBefore, 0, "Invalid seller token balance")
         await dex.createMarketOrder(Side.SELL, ticker, sellAmount)
   
-        // veify buyer ETH balance
-        let buyerEthBalanceAfter = (await dex.getEthBalance({from: accounts[1]})).toNumber()
-        let expectedBuyerEthBalance = buyerEthBalanceBefore - (sellAmount * price) // order fully filled
-        assert.equal(buyerEthBalanceAfter, expectedBuyerEthBalance, "Invalid buyer ETH balance after market order filled")
+        // veify buyer reserved ETH balance
+        let buyerReservedEthBalanceAfter = (await dex.getReservedEthBalance({from: accounts[1]})).toNumber()
+        let expectedBuyerReservedEthBalance = buyerReservedEthBalanceBefore - (sellAmount * price) // order fully filled
+        assert.equal(buyerReservedEthBalanceAfter, expectedBuyerReservedEthBalance, "Invalid buyer reserved ETH balance after market order filled")
 
         // veify seller ETH balance
         let sellerEthBalanceAfter = (await dex.getEthBalance()).toNumber()
@@ -369,6 +373,37 @@ contract("Dex - Market SELL Orders Tests", accounts => {
         assert.equal(ordersAccount0[0].amountFilled, 20, "Invalid filled amount in market order in order history")
         assert.equal(ordersAccount0[1].amountFilled, 20, "Invalid filled amount in market order in order history")
         assert.equal(ordersAccount0[2].amountFilled, 5, "Invalid filled amount in market order in order history")
+    })
+
+
+    it("A SELL market order can be executed also when the account of a BUY limit order has withdrawn their available ETH", async () => {
+        let dex = await Dex.deployed()
+        let link = await Link.deployed()
+
+        let ticker = web3.utils.fromUtf8("LINK")
+        let amount = 20 
+        let price = 10 
+
+        // accounts[1]: deposit ETH and add BUY limit order to the orderbook
+        await dex.depositEth({value: 1000, from: accounts[1]})
+        await truffleAssert.passes(
+            dex.createLimitOrder(Side.BUY, ticker, amount, price, {from: accounts[1]})
+        )
+
+        // accounts[1]: withdraw all available ETH 
+        let ethBalance = (await dex.getEthBalance({from: accounts[1]})).toNumber()
+        await dex.withdrawEth(ethBalance, {from: accounts[1]})
+        let ethBalanceAfter = (await dex.getEthBalance({from: accounts[1]})).toNumber()
+        assert.equal(ethBalanceAfter, 0, "Account should have no ETH")
+
+        // accounts[0]: deposit tokens and create SELL market order
+        await link.approve(dex.address, amount)
+        await dex.deposit(amount, ticker)
+    
+        // verify market order can be created 
+        await truffleAssert.passes(
+            dex.createMarketOrder(Side.SELL, ticker, amount)
+        )
     })
 
 })
